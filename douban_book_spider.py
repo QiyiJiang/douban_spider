@@ -15,6 +15,8 @@ from bs4 import BeautifulSoup
 from loguru import logger
 from tqdm import tqdm
 
+from proxy_pool import ProxyPool
+
 
 COOKIE = """
 __utma=81379588.1951401692.1760341158.1760341158.1760341158.1; __utmb=81379588.4.10.1760341158; __utmz=81379588.1760341158.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); __utma=30149280.1653349273.1760341158.1760341158.1760341158.1; __utmb=30149280.5.10.1760341158; __utmz=30149280.1760341158.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); push_doumail_num=0; push_noty_num=0; _pk_ses.100001.3ac3=1; ck=18ki; dbcl2="185390670:6yj1AS6B3cY"; _vwo_uuid_v2=D5D15EC8AC1AF9C42281A1CAF2511DE7B|22bd8cc1ce77128f60aa5749db954905; __yadk_uid=cRfEK8NbNNIgjo7WFm1jub6HOgh9hLDi; __utmc=81379588; __utmc=30149280; ap_v=0,6.0; _pk_id.100001.3ac3=519854a4778ba754.1760341156.; bid=batW6D2h9cA
@@ -23,8 +25,14 @@ __utma=81379588.1951401692.1760341158.1760341158.1760341158.1; __utmb=81379588.4
 class DoubanBookScraper:
     """豆瓣读书评论爬虫"""
     
-    def __init__(self, cookie=None):
-        """初始化爬虫"""
+    def __init__(self, cookie=None, use_proxy=False, proxy_file=None):
+        """
+        初始化爬虫
+        参数:
+            cookie: 豆瓣Cookie
+            use_proxy: 是否使用代理池
+            proxy_file: 代理文件路径（可选）
+        """
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             "Accept-Language": "zh-CN,zh;q=0.9",
@@ -33,6 +41,15 @@ class DoubanBookScraper:
         if cookie:
             cleaned_cookie = cookie.strip().replace("\n", "").replace("\r", "")
             self.headers["Cookie"] = cleaned_cookie
+        
+        # 初始化代理池
+        self.use_proxy = use_proxy
+        self.proxy_pool = None
+        if use_proxy:
+            logger.info("初始化代理池...")
+            self.proxy_pool = ProxyPool(proxy_file=proxy_file)
+            stats = self.proxy_pool.get_stats()
+            logger.info(f"代理池状态 - 总数:{stats['total']}, 可用:{stats['available']}")
         
         self._setup_logger()
     
@@ -93,6 +110,54 @@ class DoubanBookScraper:
             logger.error(f"写入文件失败: {str(e)}")
             return False
     
+    def _request_with_retry(self, url, max_retries=3, **kwargs):
+        """
+        带重试和代理切换的请求方法
+        参数:
+            url: 请求URL
+            max_retries: 最大重试次数
+            **kwargs: requests.get的其他参数
+        """
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                # 获取代理
+                proxies = None
+                if self.use_proxy and self.proxy_pool:
+                    proxies = self.proxy_pool.get_proxy()
+                    if proxies:
+                        kwargs['proxies'] = proxies
+                
+                # 发起请求
+                response = requests.get(url, **kwargs)
+                response.raise_for_status()
+                return response
+                
+            except requests.exceptions.ProxyError as e:
+                # 代理错误，标记失败并重试
+                if proxies:
+                    self.proxy_pool.mark_proxy_failed(proxies)
+                    logger.debug(f"代理失败，切换新代理重试 (尝试 {attempt + 1}/{max_retries})")
+                last_error = e
+                time.sleep(random.uniform(1, 2))
+                
+            except requests.exceptions.RequestException as e:
+                # 其他请求错误
+                if proxies:
+                    self.proxy_pool.mark_proxy_failed(proxies)
+                last_error = e
+                logger.debug(f"请求失败，重试 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                time.sleep(random.uniform(2, 4))
+                
+            except Exception as e:
+                last_error = e
+                logger.debug(f"未知错误，重试 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                time.sleep(random.uniform(1, 3))
+        
+        # 所有重试都失败
+        raise last_error if last_error else Exception("请求失败")
+    
     def search_book_id(self, book_name):
         """搜索书籍ID"""
         logger.info(f"[{book_name}] 开始搜索书籍")
@@ -101,7 +166,7 @@ class DoubanBookScraper:
         params = {"cat": "1001", "q": book_name}
         
         try:
-            response = requests.get(
+            response = self._request_with_retry(
                 search_url,
                 headers=self.headers,
                 params=params,
@@ -154,8 +219,7 @@ class DoubanBookScraper:
         headers = self.headers.copy()
         
         try:
-            response = requests.get(url, headers=headers, timeout=15)
-            response.raise_for_status()
+            response = self._request_with_retry(url, headers=headers, timeout=15)
             soup = BeautifulSoup(response.text, "html.parser")
             
             # 提取书名
@@ -393,7 +457,7 @@ class DoubanBookScraper:
                 }
                 
                 try:
-                    response = requests.get(base_url, headers=headers, params=params, timeout=15)
+                    response = self._request_with_retry(base_url, headers=headers, params=params, timeout=15)
                     soup = BeautifulSoup(response.text, "html.parser")
                     
                     items = soup.select(".comment-item")
@@ -522,7 +586,7 @@ class DoubanBookScraper:
                 }
                 
                 try:
-                    response = requests.get(base_url, headers=headers, params=params, timeout=15)
+                    response = self._request_with_retry(base_url, headers=headers, params=params, timeout=15)
                     soup = BeautifulSoup(response.text, "html.parser")
                     
                     items = soup.select(".review-item")
@@ -620,7 +684,7 @@ class DoubanBookScraper:
                             
                             if fetch_full_content and review_url:
                                 try:
-                                    detail_response = requests.get(review_url, headers=headers, timeout=15)
+                                    detail_response = self._request_with_retry(review_url, headers=headers, timeout=15)
                                     detail_soup = BeautifulSoup(detail_response.text, "html.parser")
                                     
                                     full_content_elem = detail_soup.select_one(".review-content")
@@ -686,10 +750,10 @@ class DoubanBookScraper:
 
 def crawl_single_book(args_tuple):
     """单本书的爬取任务（用于并行处理）"""
-    book_name, max_comments, output_base, cookie = args_tuple
+    book_name, max_comments, output_base, cookie, use_proxy, proxy_file = args_tuple
     
     try:
-        scraper = DoubanBookScraper(cookie=cookie)
+        scraper = DoubanBookScraper(cookie=cookie, use_proxy=use_proxy, proxy_file=proxy_file)
         output = f"{output_base}/{book_name}"
         os.makedirs(output, exist_ok=True)
         
@@ -724,6 +788,8 @@ def main():
     parser.add_argument("--output_dir", "-o", type=str, default="./output", help="输出目录（默认./output）")
     parser.add_argument("--cookie_file", "-c", type=str, default=None, help="豆瓣Cookie文件路径（可选）")
     parser.add_argument("--workers", "-w", type=int, default=2, help="并发线程数（默认2，建议2-4）")
+    parser.add_argument("--use_proxy", "-p", action="store_true", help="使用代理池（防止被封）")
+    parser.add_argument("--proxy_file", type=str, default=None, help="代理文件路径（每行一个代理，格式：ip:port）")
     
     args = parser.parse_args()
     
@@ -737,9 +803,14 @@ def main():
     
     logger.info(f"共需要爬取 {len(book_names)} 本书")
     logger.info(f"并发线程数: {args.workers}")
+    if args.use_proxy:
+        logger.info("✓ 已启用代理池模式")
+    else:
+        logger.warning("未启用代理池，可能会被封禁。建议使用 --use_proxy 参数")
     
     # 准备任务参数
-    tasks = [(name, args.max_comments, args.output_dir, cookie) for name in book_names]
+    tasks = [(name, args.max_comments, args.output_dir, cookie, args.use_proxy, args.proxy_file) 
+             for name in book_names]
     
     # 使用线程池并行爬取
     success_count = 0

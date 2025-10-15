@@ -52,6 +52,9 @@ if __name__ == "__main__":
     ] + subdirectories + [
         "-m", "10000",
         "-w", "10"
+    ] + [
+        "--use_proxy",
+        "--proxy_file", "proxies.txt"
     ]
     
     print(f"\n{'='*60}")

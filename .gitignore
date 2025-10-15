@@ -140,3 +140,5 @@ test/utils/app_root_path/tmp/image/*
 output/
 
 *tmp*
+
+proxies.txt

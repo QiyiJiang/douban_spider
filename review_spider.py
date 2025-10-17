@@ -12,10 +12,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from bs4 import BeautifulSoup
-from loguru import logger
 from tqdm import tqdm
 
 from proxy_pool import ProxyPool
+from logger_config import setup_logger
+
+# 配置日志（模块级别，只配置一次）
+logger = setup_logger(module_name="douban_scraper", console_level="INFO", file_level="DEBUG")
 
 
 COOKIE = """
@@ -50,33 +53,6 @@ class DoubanBookScraper:
             self.proxy_pool = ProxyPool(proxy_file=proxy_file)
             stats = self.proxy_pool.get_stats()
             logger.info(f"代理池状态 - 总数:{stats['total']}, 可用:{stats['available']}")
-        
-        self._setup_logger()
-    
-    def _setup_logger(self):
-        """配置日志输出"""
-        logger.remove()
-        
-        # 添加控制台输出（彩色）
-        logger.add(
-            sys.stdout,
-            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
-            level="INFO",
-            colorize=True
-        )
-        
-        # 添加文件输出
-        log_dir = Path("logs")
-        log_dir.mkdir(exist_ok=True)
-        
-        logger.add(
-            "logs/douban_scraper_{time:YYYY-MM-DD}.log",
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
-            rotation="00:00",
-            retention="7 days",
-            encoding="utf-8",
-            level="DEBUG"
-        )
     
     def _load_existing_ids(self, filepath):
         """加载已爬取的ID集合"""

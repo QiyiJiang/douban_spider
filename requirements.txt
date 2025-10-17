@@ -1,4 +1,6 @@
 requests==2.31.0
 beautifulsoup4==4.12.3
 loguru==0.7.2
+ebooklib==0.18
+lxml==5.1.0
 

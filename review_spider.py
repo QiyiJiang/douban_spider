@@ -786,51 +786,75 @@ def crawl_single_book(args_tuple):
         return False, book_name
 
 
-def main():
-    """主程序入口"""
-    print("\n" + "="*60)
-    print("豆瓣读书评论爬虫 v2.4 (并行优化版)")
-    print("="*60 + "\n")
-    
+def parse_arguments():
+    """解析命令行参数"""
     parser = argparse.ArgumentParser(
         description="豆瓣读书评论爬虫",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
-    parser.add_argument("--book_name", "-n", type=str, nargs='+', required=True, help="要爬取的书名（可以是单个或多个，用空格分隔）")
-    parser.add_argument("--max_comments", "-m", type=int, default=100, help="要爬取的评论数量（默认100）")
-    parser.add_argument("--output_dir", "-o", type=str, default="./output", help="输出目录（默认./output）")
-    parser.add_argument("--cookie_file", "-c", type=str, default=None, help="豆瓣Cookie文件路径（可选）")
-    parser.add_argument("--workers", "-w", type=int, default=1, help="并发线程数（默认2，建议2-4）")
-    parser.add_argument("--use_proxy", "-p", action="store_true", help="使用代理池（防止被封）")
-    parser.add_argument("--proxy_file", type=str, default=None, help="代理文件路径（每行一个代理，格式：ip:port）")
+    parser.add_argument("--book_name", "-n", type=str, nargs='+', required=True, 
+                       help="要爬取的书名（可以是单个或多个，用空格分隔）")
+    parser.add_argument("--max_comments", "-m", type=int, default=100, 
+                       help="要爬取的评论数量（默认100）")
+    parser.add_argument("--output_dir", "-o", type=str, default="./output", 
+                       help="输出目录（默认./output）")
+    parser.add_argument("--cookie_file", "-c", type=str, default=None, 
+                       help="豆瓣Cookie文件路径（可选）")
+    parser.add_argument("--workers", "-w", type=int, default=1, 
+                       help="并发线程数（默认2，建议2-4）")
+    parser.add_argument("--use_proxy", "-p", action="store_true", 
+                       help="使用代理池（防止被封）")
+    parser.add_argument("--proxy_file", type=str, default=None, 
+                       help="代理文件路径（每行一个代理，格式：ip:port）")
     
-    args = parser.parse_args()
-    
-    if args.cookie_file:
-        with open(args.cookie_file, "r", encoding="utf-8") as f:
-            cookie = f.read()
-    else:
-        cookie = COOKIE
-    
-    book_names = args.book_name if isinstance(args.book_name, list) else [args.book_name]
-    
+    return parser.parse_args()
+
+
+def load_cookie(cookie_file=None):
+    """加载Cookie配置"""
+    if cookie_file:
+        try:
+            with open(cookie_file, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            logger.warning(f"读取Cookie文件失败: {str(e)}, 使用默认Cookie")
+    return COOKIE
+
+
+def log_crawl_config(book_names, workers, use_proxy):
+    """记录爬取配置信息"""
     logger.info(f"共需要爬取 {len(book_names)} 本书")
-    logger.info(f"并发线程数: {args.workers}")
-    if args.use_proxy:
+    logger.info(f"并发线程数: {workers}")
+    if use_proxy:
         logger.info("✓ 已启用代理池模式")
     else:
         logger.warning("未启用代理池，可能会被封禁。建议使用 --use_proxy 参数")
+
+
+def run_parallel_crawl(book_names, max_comments, output_dir, cookie, use_proxy, proxy_file, workers):
+    """执行并行爬取任务
     
+    参数:
+        book_names: 书籍名称列表
+        max_comments: 每本书爬取的评论数量
+        output_dir: 输出目录
+        cookie: Cookie配置
+        use_proxy: 是否使用代理
+        proxy_file: 代理文件路径
+        workers: 并发线程数
+        
+    返回:
+        (success_count, failed_books): 成功数量和失败书籍列表
+    """
     # 准备任务参数
-    tasks = [(name, args.max_comments, args.output_dir, cookie, args.use_proxy, args.proxy_file) 
+    tasks = [(name, max_comments, output_dir, cookie, use_proxy, proxy_file) 
              for name in book_names]
     
-    # 使用线程池并行爬取
     success_count = 0
     failed_books = []
     
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(crawl_single_book, task): task[0] for task in tasks}
         
         with tqdm(total=len(book_names), desc="总体进度", unit="本") as pbar:
@@ -848,14 +872,47 @@ def main():
                 finally:
                     pbar.update(1)
     
-    # 输出统计信息
+    return success_count, failed_books
+
+
+def print_summary(success_count, total_count, failed_books):
+    """打印爬取统计信息"""
     logger.info(f"\n{'='*60}")
     logger.info(f"爬取完成统计:")
-    logger.info(f"  成功: {success_count}/{len(book_names)} 本")
+    logger.info(f"  成功: {success_count}/{total_count} 本")
     if failed_books:
         logger.warning(f"  失败: {len(failed_books)} 本")
         logger.warning(f"  失败书籍: {', '.join(failed_books)}")
     logger.info(f"{'='*60}\n")
+
+
+def main():
+    """主程序入口"""
+    # 解析命令行参数
+    args = parse_arguments()
+    
+    # 加载Cookie配置
+    cookie = load_cookie(args.cookie_file)
+    
+    # 获取书籍名称列表
+    book_names = args.book_name if isinstance(args.book_name, list) else [args.book_name]
+    
+    # 记录配置信息
+    log_crawl_config(book_names, args.workers, args.use_proxy)
+    
+    # 执行并行爬取
+    success_count, failed_books = run_parallel_crawl(
+        book_names=book_names,
+        max_comments=args.max_comments,
+        output_dir=args.output_dir,
+        cookie=cookie,
+        use_proxy=args.use_proxy,
+        proxy_file=args.proxy_file,
+        workers=args.workers
+    )
+    
+    # 打印统计信息
+    print_summary(success_count, len(book_names), failed_books)
 
 
 if __name__ == "__main__":

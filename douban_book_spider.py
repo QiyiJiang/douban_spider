@@ -326,6 +326,13 @@ class DoubanBookScraper:
                             if intro_div:
                                 paragraphs = intro_div.find_all("p")
                                 summary = "\n".join([p.get_text(strip=True) for p in paragraphs])
+                    
+                    # 如果还是没找到，直接查找intro div（处理没有展开/收起功能的页面）
+                    if not summary:
+                        intro_div = link_report.find("div", class_="intro")
+                        if intro_div:
+                            paragraphs = intro_div.find_all("p")
+                            summary = "\n".join([p.get_text(strip=True) for p in paragraphs])
             
             # 提取作者简介
             author_intro = ""
@@ -352,6 +359,13 @@ class DoubanBookScraper:
                             if intro_div:
                                 paragraphs = intro_div.find_all("p")
                                 author_intro = "\n".join([p.get_text(strip=True) for p in paragraphs])
+                    
+                    # 如果还是没找到，直接查找intro div（处理没有展开/收起功能的页面）
+                    if not author_intro:
+                        intro_div = author_container.find("div", class_="intro")
+                        if intro_div:
+                            paragraphs = intro_div.find_all("p")
+                            author_intro = "\n".join([p.get_text(strip=True) for p in paragraphs])
 
             # 提取目录
             catalog = ""
@@ -787,7 +801,7 @@ def main():
     parser.add_argument("--max_comments", "-m", type=int, default=100, help="要爬取的评论数量（默认100）")
     parser.add_argument("--output_dir", "-o", type=str, default="./output", help="输出目录（默认./output）")
     parser.add_argument("--cookie_file", "-c", type=str, default=None, help="豆瓣Cookie文件路径（可选）")
-    parser.add_argument("--workers", "-w", type=int, default=2, help="并发线程数（默认2，建议2-4）")
+    parser.add_argument("--workers", "-w", type=int, default=1, help="并发线程数（默认2，建议2-4）")
     parser.add_argument("--use_proxy", "-p", action="store_true", help="使用代理池（防止被封）")
     parser.add_argument("--proxy_file", type=str, default=None, help="代理文件路径（每行一个代理，格式：ip:port）")
     
